@@ -17,3 +17,5 @@ export const accountRoles: AccountRole[] = [
 export const rolesDecoratorKey = 'roles';
 
 export type IShortAccount = Pick<Account, 'email' | 'name'>;
+
+export type AccountData = Pick<Account, 'email' | 'name' | 'id' | 'role'>;
