@@ -17,6 +17,7 @@ import { IResponse, IResponseNoData } from '../types/general';
 import { ShareProposalMessage } from '../types/message';
 import { SearchDto } from '../dtos/shared/search.dto';
 import { IShareProposal } from '../types/share-proposal';
+import { TakeProposalDto } from '../dtos/share-proposal/take-proposal.dto.';
 
 @Controller('share-proposal')
 export class ShareProposalController {
@@ -62,6 +63,25 @@ export class ShareProposalController {
     return {
       success: true,
       message: ShareProposalMessage.ShareProposalSuccessfullyDeleted,
+    };
+  }
+
+  @AuthNeeded()
+  @Post(':id/take-proposal')
+  public async takeProposal(
+    @Param('id') id: number,
+    @Req() request: IAuthorizedRequest,
+    @Body(new ValidationPipe()) takeProposalBody: TakeProposalDto,
+  ): Promise<IResponseNoData> {
+    await this.shareProposalService.takeProposal(
+      request.account.accountId,
+      id,
+      takeProposalBody.amount,
+    );
+
+    return {
+      success: true,
+      message: ShareProposalMessage.TakeProposalSuccess,
     };
   }
 }

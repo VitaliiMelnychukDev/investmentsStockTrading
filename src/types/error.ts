@@ -53,6 +53,8 @@ export enum ShareProposalError {
   ShareProposalDeleteFail = 'ShareProposalDeleteFail',
   ShareProposalNotFound = 'ShareProposalNotFound',
   ShareProposalSearchFail = 'ShareProposalSearchFail',
+  ShareProposalTakeProposalFail = 'ShareProposalTakeProposalFail',
+  TakeProposalAmountTooMuch = 'TakeProposalAmountTooMuch',
 }
 
 export enum OperationError {

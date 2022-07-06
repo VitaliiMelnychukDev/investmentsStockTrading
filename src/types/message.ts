@@ -18,4 +18,5 @@ export enum ShareProposalMessage {
   ShareProposalSuccessfullyCreated = 'ShareProposalSuccessfullyCreated',
   ShareProposalSuccessfullyDeleted = 'ShareProposalSuccessfullyDeleted',
   ShareProposalSuccessfullyUpdated = 'ShareProposalSuccessfullyUpdated',
+  TakeProposalSuccess = 'TakeProposalSuccess',
 }

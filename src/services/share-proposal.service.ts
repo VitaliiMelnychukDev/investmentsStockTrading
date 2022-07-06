@@ -1,7 +1,17 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ShareProposal } from '../entities/share-proposal.entity';
-import { FindOptionsWhere, ILike, LessThan, Repository } from 'typeorm';
+import {
+  DataSource,
+  FindOptionsWhere,
+  ILike,
+  LessThan,
+  Repository,
+} from 'typeorm';
 import { AddDto } from '../dtos/share-proposal/add.dto';
 import { ShareError, ShareProposalError } from '../types/error';
 import { ShareService } from './share.service';
@@ -9,8 +19,17 @@ import { Share } from '../entities/share.entity';
 import { SearchDto } from '../dtos/shared/search.dto';
 import { PaginationService } from './pagination.service';
 import { ShareProposalsHelper } from '../helpers/share-proposals.helper';
-import { IShareProposal } from '../types/share-proposal';
+import { IGetShareProposal, IShareProposal } from '../types/share-proposal';
 import { AccountService } from './account.service';
+import { ShareAvailableService } from './share-available.service';
+import { OperationService } from './operation.service';
+import { ShareOwnerService } from './share-owner.service';
+import { ShareOwner } from '../entities/share-owner.entity';
+import { ShareAvailable } from '../entities/share-available.entity';
+import { Topic } from '../types/kafka';
+import { ProducerService } from './producer.service';
+import { Operation } from '../entities/operation.entity';
+import { Account } from '../entities/account.entity';
 
 @Injectable()
 export class ShareProposalService {
@@ -21,9 +40,136 @@ export class ShareProposalService {
     @InjectRepository(ShareProposal)
     private shareProposalRepository: Repository<ShareProposal>,
     private shareService: ShareService,
+    private shareAvailableService: ShareAvailableService,
+    private shareOwnerService: ShareOwnerService,
+    private operationService: OperationService,
     private paginationService: PaginationService,
     private accountService: AccountService,
+    private dataSource: DataSource,
+    private producerService: ProducerService,
   ) {}
+
+  public async takeProposal(
+    accountId: number,
+    id: number,
+    amount: number,
+  ): Promise<void> {
+    const account: Account = await this.accountService.getAccount(
+      accountId,
+      ShareProposalError.ShareProposalTakeProposalFail,
+      true,
+    );
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction('REPEATABLE READ');
+
+    let shareProposal: ShareProposal | null = null;
+    let shareOwner: ShareOwner | null = null;
+    let shareOwnerAvailbleShareCount = 0;
+
+    try {
+      shareProposal = await this.get({
+        id,
+        queryRunner,
+        error: ShareProposalError.ShareProposalTakeProposalFail,
+      });
+
+      if (shareProposal) {
+        shareOwner = await this.shareOwnerService.get({
+          accountId,
+          shareId: shareProposal.shareId,
+        });
+      }
+
+      if (shareOwner) {
+        shareOwnerAvailbleShareCount =
+          await this.shareAvailableService.getSharesCount(
+            shareProposal.shareId,
+            accountId,
+          );
+      }
+    } catch {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+
+      throw new BadRequestException(
+        ShareProposalError.ShareProposalTakeProposalFail,
+      );
+    }
+
+    if (!shareProposal) {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+
+      throw new NotFoundException(ShareProposalError.ShareProposalNotFound);
+    }
+
+    if (
+      shareProposal.amount < amount ||
+      !shareOwner ||
+      shareOwner.amount < amount + shareOwnerAvailbleShareCount
+    ) {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+
+      throw new BadRequestException(
+        ShareProposalError.TakeProposalAmountTooMuch,
+      );
+    }
+
+    try {
+      const shareAvailable: ShareAvailable =
+        await this.shareAvailableService.sendShareOnStock({
+          accountId,
+          shareId: shareProposal.shareId,
+          amount: 0,
+          price: shareProposal.price,
+          queryRunner,
+        });
+
+      const savedOperation: Operation = await this.operationService.add({
+        buyerId: shareProposal.accountId,
+        sellerId: accountId,
+        shareId: shareProposal.id,
+        amount,
+        price: shareProposal.price,
+        shareAvailableId: shareAvailable.id,
+        shareProposalId: shareProposal.id,
+        queryRunner,
+      });
+
+      await queryRunner.manager.getRepository(ShareProposal).update(
+        {
+          id,
+        },
+        {
+          amount: shareProposal.amount - amount,
+        },
+      );
+
+      await this.producerService.sendMessage(
+        Topic.CodeTransactions,
+        accountId,
+        {
+          cardCode: shareProposal.cardCode,
+          receiverCardNumber: account.cardNumber,
+          amount: amount * shareProposal.price,
+          identifierId: savedOperation.id,
+        },
+      );
+
+      await queryRunner.commitTransaction();
+      await queryRunner.release();
+    } catch {
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
+
+      throw new BadRequestException(
+        ShareProposalError.ShareProposalTakeProposalFail,
+      );
+    }
+  }
 
   public async search(
     searchParams: SearchDto,
@@ -119,11 +265,11 @@ export class ShareProposalService {
   }
 
   public async delete(accountId: number, id: number): Promise<void> {
-    const shareProposal: ShareProposal | null = await this.get(
+    const shareProposal: ShareProposal | null = await this.get({
       id,
-      ShareProposalError.ShareProposalDeleteFail,
-      true,
-    );
+      error: ShareProposalError.ShareProposalDeleteFail,
+      throwIfNotFound: true,
+    });
 
     if (shareProposal.accountId !== accountId) {
       throw new BadRequestException(ShareProposalError.ShareProposalDeleteFail);
@@ -143,20 +289,25 @@ export class ShareProposalService {
     }
   }
 
-  private async get(
-    id: number,
-    error: ShareProposalError,
+  private async get({
+    id,
+    error,
     throwIfNotFound = false,
-  ): Promise<ShareProposal | null> {
+    queryRunner,
+  }: IGetShareProposal): Promise<ShareProposal | null> {
     let shareProposal: ShareProposal | number = null;
+    const repository: Repository<ShareProposal> = queryRunner
+      ? queryRunner.manager.getRepository(ShareProposal)
+      : this.shareProposalRepository;
 
     try {
-      shareProposal = await this.shareProposalRepository.findOne({
+      shareProposal = await repository.findOne({
         where: {
           id,
           removed: false,
           expiredAt: LessThan(this.getProposalExpiration()),
         },
+        ...(queryRunner && { lock: { mode: 'for_no_key_update' } }),
       });
     } catch {
       throw new BadRequestException(error);

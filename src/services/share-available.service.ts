@@ -24,6 +24,8 @@ import { AccountService } from './account.service';
 import { ProducerService } from './producer.service';
 import { Topic } from '../types/kafka';
 import { Operation } from '../entities/operation.entity';
+import { QueryRunnerOnly } from '../types/general';
+import { ShareProposal } from '../entities/share-proposal.entity';
 
 @Injectable()
 export class ShareAvailableService {
@@ -60,7 +62,6 @@ export class ShareAvailableService {
           accountId,
           OperationStatus.PendingPayment,
         );
-
       return notFinishedOperationsShareCount + availableShareCount;
     } catch (e) {
       throw new BadRequestException(ShareAvailableError.GetSharesCountFail);
@@ -103,6 +104,27 @@ export class ShareAvailableService {
           },
           {
             amount: shareAvailable.amount + operation.amount,
+          },
+        );
+      }
+
+      if (operation.shareProposalId) {
+        const shareProposalRepository: Repository<ShareProposal> =
+          queryRunner.manager.getRepository(ShareProposal);
+
+        const shareProposal: ShareProposal | null =
+          await shareProposalRepository.findOne({
+            where: {
+              id: operation.shareProposalId,
+            },
+          });
+
+        await queryRunner.manager.getRepository(ShareProposal).update(
+          {
+            id: operation.shareProposalId,
+          },
+          {
+            amount: shareProposal.amount + operation.amount,
           },
         );
       }
@@ -219,17 +241,21 @@ export class ShareAvailableService {
     }
   }
 
-  public async sendShareOnStock(params: SendShareOnStock): Promise<void> {
+  public async sendShareOnStock(
+    params: SendShareOnStock,
+  ): Promise<ShareAvailable> {
     try {
+      const repository = this.getRepository(params);
+
       const newShareAvailable: ShareAvailable = new ShareAvailable();
       newShareAvailable.shareId = params.shareId;
       newShareAvailable.accountId = params.accountId;
       newShareAvailable.amount = params.amount;
       newShareAvailable.marketPrice = !params.price;
       newShareAvailable.price = params.price || null;
-      newShareAvailable.removed = false;
+      newShareAvailable.removed = params.removed || false;
 
-      await this.shareAvailableRepository.save(newShareAvailable);
+      return await repository.save(newShareAvailable);
     } catch (e) {
       throw new BadRequestException(ShareAvailableError.CreateShareOnStockFail);
     }
@@ -315,9 +341,8 @@ export class ShareAvailableService {
     let shareAvailable: ShareAvailable | number = null;
 
     try {
-      const shareAvailableRepository: Repository<ShareAvailable> = queryRunner
-        ? queryRunner.manager.getRepository(ShareAvailable)
-        : this.shareAvailableRepository;
+      const shareAvailableRepository: Repository<ShareAvailable> =
+        this.getRepository({ queryRunner });
       shareAvailable = await shareAvailableRepository.findOne({
         where: {
           id,
@@ -336,5 +361,11 @@ export class ShareAvailableService {
     }
 
     return shareAvailable;
+  }
+
+  private getRepository(params: QueryRunnerOnly): Repository<ShareAvailable> {
+    return params.queryRunner
+      ? params.queryRunner.manager.getRepository(ShareAvailable)
+      : this.shareAvailableRepository;
   }
 }

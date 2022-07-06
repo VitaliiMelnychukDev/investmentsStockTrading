@@ -3,6 +3,7 @@ export enum Topic {
   BankCardsToCheck = 'bank-cards-to-check',
   BankCardsCheckResponse = 'bank-cards-check-response',
   Transactions = 'transactions',
+  CodeTransactions = 'code-transactions',
   TransactionsStatus = 'transactions-status',
 }
 

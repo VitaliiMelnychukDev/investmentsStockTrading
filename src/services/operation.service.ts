@@ -30,13 +30,13 @@ export class OperationService {
         .groupBy('"sellerId"')
         .addGroupBy('"shareId"')
         .addGroupBy('"status"')
-        .having('shareAvailable.sellerId = :accountId', { accountId })
-        .andHaving('shareAvailable.shareId = :shareId', { shareId })
-        .andHaving('shareAvailable.status = :status', { status })
+        .having('operations.sellerId = :accountId', { accountId })
+        .andHaving('operations.shareId = :shareId', { shareId })
+        .andHaving('operations.status = :status', { status })
         .getRawOne<{ amount: number }>();
 
       return shareWaitingPaymentCount ? shareWaitingPaymentCount.amount : 0;
-    } catch (e) {
+    } catch {
       throw new BadRequestException(OperationError.GetSharesCountFail);
     }
   }
